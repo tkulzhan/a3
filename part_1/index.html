@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Google Stock Data Visualization</title>
+  <script src="https://d3js.org/d3.v6.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      background-color: #f4f4f4;
+    }
+    .container {
+      width: 80%;
+      margin: auto;
+    }
+    .chart-container {
+      background: white;
+      padding: 20px;
+      margin: 20px 0;
+      border-radius: 10px;
+      box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+      position: relative;
+    }
+    .tooltip {
+      position: absolute;
+      background: white;
+      padding: 5px;
+      border: 1px solid #ccc;
+      pointer-events: none;
+      font-size: 12px;
+      display: none;
+    }
+    .line {
+      fill: none;
+      stroke: steelblue;
+      stroke-width: 2px;
+    }
+    .zoom {
+      cursor: move;
+      fill: none;
+      pointer-events: all;
+    }
+    button {
+      margin: 10px;
+      padding: 10px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Google Stock Data Visualization</h1>
+    <div class="chart-container">
+      <h2>Stock Price Over Time</h2>
+      <p>This line chart shows the closing stock prices over time. The data is calculated based on daily stock market values.</p>
+      <svg id="lineChart" width="800" height="400"></svg>
+      <div>
+        <button onclick="filterData('1w')">1 Week</button>
+        <button onclick="filterData('1m')">1 Month</button>
+        <button onclick="filterData('3m')">3 Months</button>
+        <button onclick="filterData('6m')">6 Months</button>
+        <button onclick="filterData('1y')">1 Year</button>
+      </div>
+    </div>
+    <div class="chart-container">
+      <h2>Volume Distribution</h2>
+      <p>This bar chart represents the stock trading volume over time, showing how trading activity changes daily.</p>
+      <svg id="barChart" width="800" height="400"></svg>
+    </div>
+  </div>
+
+  <!-- Tooltip Element -->
+  <div class="tooltip" id="tooltip"></div>
+
+  <script>
+    fetch('./google_stock_data.json')
+      .then(response => response.json())
+      .then(stockData => {
+        const parseDate = d3.timeParse("%Y-%m-%d");
+        const formatDate = d3.timeFormat("%b %d, %Y");
+        stockData.forEach(d => {
+          d.date = parseDate(d.date);
+          d.close = +d.close;
+          d.volume = +d.volume;
+          d.high = +d.high;
+          d.low = +d.low;
+        });
+
+        // ******************************
+        // Line Chart (Stock Price)
+        // ******************************
+        const lineSvg = d3.select("#lineChart"),
+              margin = { top: 20, right: 30, bottom: 30, left: 50 },
+              width = +lineSvg.attr("width") - margin.left - margin.right,
+              height = +lineSvg.attr("height") - margin.top - margin.bottom;
+
+        // Initially set the x-axis domain to the full extent
+        let x = d3.scaleTime()
+                  .domain(d3.extent(stockData, d => d.date))
+                  .range([0, width]);
+        const y = d3.scaleLinear()
+                    .domain([d3.min(stockData, d => d.low), d3.max(stockData, d => d.high)])
+                    .range([height, 0]);
+
+        const line = d3.line()
+                       .x(d => x(d.date))
+                       .y(d => y(d.close));
+
+        const g = lineSvg.append("g")
+                         .attr("transform", `translate(${margin.left},${margin.top})`);
+
+        // Draw the line path using the full dataset initially.
+        g.append("path")
+         .datum(stockData)
+         .attr("class", "line")
+         .attr("d", line)
+         .transition().duration(2000).ease(d3.easeLinear);
+
+        // Draw axes; store the x-axis group so we can update it later.
+        g.append("g")
+         .call(d3.axisLeft(y));
+
+        const xAxisGroup = g.append("g")
+                            .attr("transform", `translate(0,${height})`)
+                            .call(d3.axisBottom(x));
+
+        // Focus group for hover effect
+        const focus = g.append("g")
+                       .style("display", "none");
+
+        focus.append("circle")
+             .attr("r", 4.5)
+             .attr("fill", "steelblue");
+
+        focus.append("rect")
+             .attr("class", "tooltip-box")
+             .attr("width", 100)
+             .attr("height", 40)
+             .attr("x", 10)
+             .attr("y", -22)
+             .attr("rx", 4)
+             .attr("ry", 4)
+             .attr("fill", "white")
+             .attr("stroke", "#ccc");
+
+        focus.append("text")
+             .attr("x", 18)
+             .attr("y", -2)
+             .attr("font-size", "12px");
+
+        // Overlay rectangle for capturing mouse events
+        g.append("rect")
+         .attr("class", "overlay")
+         .attr("width", width)
+         .attr("height", height)
+         .style("fill", "none")
+         .style("pointer-events", "all")
+         .on("mouseover", () => focus.style("display", null))
+         .on("mouseout", () => focus.style("display", "none"))
+         .on("mousemove", mousemove);
+
+        // Use currentData for bisecting so that filtering is reflected in the hover
+        let currentData = stockData;  // global variable to track data currently displayed
+        const bisectDate = d3.bisector(d => d.date).left;
+
+        function mousemove(event) {
+          const mouseX = d3.pointer(event)[0];
+          const x0 = x.invert(mouseX);
+          const i = bisectDate(currentData, x0, 1);
+          if (!currentData[i - 1]) return;
+          const d0 = currentData[i - 1];
+          const d1 = currentData[i];
+          let d = d0;
+          if (d1 && (x0 - d0.date > d1.date - x0)) {
+            d = d1;
+          }
+          focus.attr("transform", `translate(${x(d.date)},${y(d.close)})`);
+          focus.select("text").text(`${formatDate(d.date)}: $${d.close}`);
+        }
+
+        // ******************************
+        // Bar Chart (Volume Distribution)
+        // ******************************
+        const barSvg = d3.select("#barChart");
+        const barMargin = { top: 50, right: 30, bottom: 30, left: 50 },
+              barWidth = +barSvg.attr("width") - barMargin.left - barMargin.right,
+              barHeight = +barSvg.attr("height") - barMargin.top - barMargin.bottom;
+
+        const barG = barSvg.append("g")
+                           .attr("transform", `translate(${barMargin.left},${barMargin.top})`);
+
+        const barX = d3.scaleBand()
+                       .domain(stockData.map(d => d.date))
+                       .range([0, barWidth])
+                       .padding(0.1);
+
+        const barY = d3.scaleLinear()
+                       .domain([0, d3.max(stockData, d => d.volume)])
+                       .range([barHeight, 0]);
+
+        // Axes for bar chart
+        barG.append("g")
+            .attr("transform", `translate(0,${barHeight})`)
+            .call(d3.axisBottom(barX)
+                    .tickFormat(d3.timeFormat("%b %d"))
+                    .tickValues(stockData.map(d => d.date)
+                                          .filter((d, i) => !(i % Math.ceil(stockData.length / 10)))));
+
+        barG.append("g")
+            .call(d3.axisLeft(barY));
+
+        // Tooltip element (using the same tooltip div defined in HTML)
+        const tooltip = d3.select("#tooltip");
+
+        // Create bars with tooltip events
+        barG.selectAll("rect")
+            .data(stockData)
+            .enter()
+            .append("rect")
+            .attr("x", d => barX(d.date))
+            .attr("y", d => barY(d.volume))
+            .attr("height", d => barHeight - barY(d.volume))
+            .attr("width", barX.bandwidth())
+            .attr("fill", "steelblue")
+            .on("mouseover", function(event, d) {
+              tooltip.style("display", "block")
+                     .html(`<strong>${formatDate(d.date)}</strong><br/>Volume: ${d.volume}`);
+              d3.select(this).attr("fill", "darkorange");
+            })
+            .on("mousemove", function(event) {
+              tooltip.style("left", (event.pageX + 10) + "px")
+                     .style("top", (event.pageY - 25) + "px");
+            })
+            .on("mouseout", function() {
+              tooltip.style("display", "none");
+              d3.select(this).attr("fill", "steelblue");
+            });
+
+        // ******************************
+        // Data Filtering for Line Chart (Zooming In)
+        // ******************************
+        window.filterData = function(range) {
+          let endDate = new Date();
+          let startDate = new Date();
+          
+          switch (range) {
+            case '1w': startDate.setDate(endDate.getDate() - 7); break;
+            case '1m': startDate.setMonth(endDate.getMonth() - 1); break;
+            case '3m': startDate.setMonth(endDate.getMonth() - 3); break;
+            case '6m': startDate.setMonth(endDate.getMonth() - 6); break;
+            case '1y': startDate.setFullYear(endDate.getFullYear() - 1); break;
+          }
+          
+          // Filter the data to the specified time period.
+          currentData = stockData.filter(d => d.date >= startDate && d.date <= endDate);
+          
+          // Update the x-axis domain to zoom in on the filtered period.
+          x.domain(d3.extent(currentData, d => d.date));
+          
+          // Update the line chart.
+          g.select(".line")
+           .datum(currentData)
+           .transition()
+           .duration(1000)
+           .attr("d", line);
+          
+          // Update the x-axis.
+          xAxisGroup.transition().duration(1000).call(d3.axisBottom(x));
+        }
+      });
+  </script>
+</body>
+</html>
